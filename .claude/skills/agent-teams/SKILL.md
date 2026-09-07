@@ -164,7 +164,7 @@ The lead will:
 
 The `claude agents` subcommand for dispatched background sessions gained per-session configuration flags: `--add-dir`, `--settings`, `--mcp-config`, `--plugin-dir`, `--permission-mode`, `--model`, `--effort`, `--dangerously-skip-permissions`. Useful when a teammate needs a different model than the lead (e.g. dispatch a Haiku worker for grep-heavy tasks while the lead stays on Opus), a tighter permission mode, or an alternate `.mcp-config`. Fast mode runs on **Opus 5** and Opus 4.8 (Opus 4.7 was removed from fast mode in CC 2.1.219).
 
-For the foundation's own heaviest dispatched sessions, Opus 5 (default `opus` alias since 2026-07-24, within ~0.5% of Fable 5's peak at half the price) is the right lead model; `--model claude-fable-5` remains a deliberate niche escalation (~2× Opus 5) for the rare run where Fable's last half-percent matters. Per-session selection only: agent `model:` frontmatter is unchanged and there is no `fable` tier alias. Fable 5 has been generally available since 2026-07-01.
+For the foundation's own heaviest dispatched sessions, Opus 5 (default `opus` alias since 2026-07-24) is the right lead model; `--model claude-fable-5-1` remains a deliberate niche escalation for the rare run where the top tier's last half-percent matters. `claude-fable-5-1` has been the default Fable model since 2026-09-01. A `fable` alias now exists in sub-agent `model:` frontmatter, but this foundation pins no agent to it — a cost decision, not a limitation of the tool.
 
 ### Background agents (CLI 2.1.198+, July 2026)
 
