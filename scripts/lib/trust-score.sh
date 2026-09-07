@@ -6,7 +6,7 @@
 # applies no popularity bar; community applies the global bar from
 # .claude/curation/trust-thresholds.json.
 #
-# API:  trust_score <owner/repo> <authority|community>
+# API:  trust_score <owner/repo> <authority|community> [<'+'-joined subpaths>]
 #   stdout: one JSON object {repo,track,stars,forks,pushedAt,ageDays,archived,
 #           license,verdict,reasons[]}
 #   exit:   0 = a verdict was computed (pass|flag|fail)
@@ -44,6 +44,41 @@ _ts_has_license_file() {
     printf '%s' "$body" \
         | jq -e 'any(.[]?; (.type == "file")
             and (.name | test("^(licen[cs]e|copying|unlicense)"; "i")))' >/dev/null 2>&1
+}
+
+# _ts_subpath_license_file <owner/repo> <'+'-joined subpaths> — return 0 iff
+# EVERY named subpath holds its own license FILE. Some repos license per SKILL
+# rather than at the root: anthropics/skills has never shipped a root LICENSE,
+# yet skills/claude-api and skills/mcp-builder each carry an Apache-2.0
+# LICENSE.txt. A root-only cascade reads that as "no license at all" and pins the
+# record to propose-only forever, so a first-party fully licensed repo can never
+# auto-re-pin. This arm asks the SUBPATH question about a SUBPATH-scoped subject.
+#
+# EVERY, not ANY: we consume each subpath as its own skill, so one licensed
+# sibling must never license an unlicensed one. Fail SAFE (EF-012): an empty
+# subpath list, an unfetchable listing, or any gh/jq failure returns non-zero so
+# the caller keeps the conservative missing-license flag. Like the root probe it
+# judges PRESENCE, not terms — a present-but-unclassified license is exactly what
+# it reports.
+_ts_subpath_license_file() {
+    local repo="$1" subs="${2:-}" sp body sps=()
+    # `<<<` always supplies a trailing newline, so this read cannot fail and an
+    # `|| return 1` on it would be an unreachable guard reading as protection
+    # (same idiom as curation-safety.sh). The array-length check below is the
+    # real one: an empty list yields an empty array, so it covers both "the
+    # caller named no subpath" and "the split produced nothing" — the arm is then
+    # inert and the caller keeps whatever verdict the root cascade reached.
+    IFS='+' read -ra sps <<< "$subs" || true
+    [ "${#sps[@]}" -gt 0 ] || return 1
+    for sp in "${sps[@]}"; do
+        [ -n "$sp" ] || continue
+        body=$(curation_gh_api "repos/$repo/contents/$sp" 2>/dev/null) || return 1
+        printf '%s' "$body" \
+            | jq -e 'any(.[]?; (.type == "file")
+                and (.name | test("^(licen[cs]e|copying|unlicense)"; "i")))' >/dev/null 2>&1 \
+            || return 1
+    done
+    return 0
 }
 
 # _ts_manifest_license <owner/repo> — return 0 iff a structured manifest declares
@@ -94,9 +129,9 @@ _ts_readme_license() {
         | grep -iqE '(^|[^[:alnum:]-])(MIT|Apache(-| )?2(\.0)?|BSD(-[0-9]-Clause)?|ISC|MPL-2\.0|GPL-[0-9]|AGPL-[0-9]|LGPL-[0-9]|Unlicense|CC0|BSL)([^[:alnum:]-]|$)'
 }
 
-# trust_score <owner/repo> <track>
+# trust_score <owner/repo> <track> [<subpaths>]
 trust_score() {
-    local repo="$1" track="$2"
+    local repo="$1" track="$2" subpaths="${3:-}"
 
     case "$track" in
         authority|community) ;;
@@ -184,6 +219,8 @@ trust_score() {
                 reasons+=("manifest-declared-license")
             elif _ts_has_license_file "$repo"; then
                 reasons+=("unrecognized-license")
+            elif _ts_subpath_license_file "$repo" "$subpaths"; then
+                reasons+=("subpath-license")
             elif _ts_readme_license "$repo"; then
                 reasons+=("readme-declared-license")
             else
@@ -216,7 +253,7 @@ trust_score() {
 # Allow running as a CLI: trust-score.sh <repo> <track>
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     set -u
-    [ $# -eq 2 ] || { echo "Usage: $(basename "$0") <owner/repo> <authority|community>" >&2; exit 2; }
-    trust_score "$1" "$2"
+    { [ $# -eq 2 ] || [ $# -eq 3 ]; } || { echo "Usage: $(basename "$0") <owner/repo> <authority|community> [<subpaths>]" >&2; exit 2; }
+    trust_score "$1" "$2" "${3:-}"
     exit $?
 fi

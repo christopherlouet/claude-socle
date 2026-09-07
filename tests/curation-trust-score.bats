@@ -101,6 +101,40 @@ EOF
     chmod +x "$TEST_DIR/fakebin/gh"
 }
 
+# fake_gh_subpaths <repo-json> <root-contents-json> [<subpath> <contents-json>]...
+# Path-aware fake `gh` that serves a DISTINCT contents listing per subpath, so a
+# test can give the repo ROOT no license while a skill SUBPATH ships its own
+# (the anthropics/skills convention). A subpath with no fixture 404s (exit 1)
+# exactly like the real API. The manifest and README endpoints always 404 here,
+# so the subpath arm is the only fallback under test.
+fake_gh_subpaths() {
+    printf '%s' "$1" > "$TEST_DIR/repo.json"
+    printf '%s' "$2" > "$TEST_DIR/root-contents.json"
+    shift 2
+    while [ "$#" -ge 2 ]; do
+        printf '%s' "$2" > "$TEST_DIR/sub-$(printf '%s' "$1" | tr '/' '_').json"
+        shift 2
+    done
+    cat > "$TEST_DIR/fakebin/gh" <<EOF
+#!/usr/bin/env bash
+serve() { if [ -f "\$1" ]; then cat "\$1"; exit 0; else echo "fake gh 404: \$2" >&2; exit 1; fi; }
+if [ "\$1" = "api" ]; then
+  case "\$2" in
+    repos/*/contents/.claude-plugin/plugin.json*) exit 1 ;;
+    repos/*/contents/package.json*)               exit 1 ;;
+    repos/*/readme*)                              exit 1 ;;
+    repos/*/contents)                             serve "$TEST_DIR/root-contents.json" "\$2" ;;
+    repos/*/contents/*)
+        p="\${2#*/contents/}"; p="\${p%%\\?*}"
+        serve "$TEST_DIR/sub-\$(printf '%s' "\$p" | tr '/' '_').json" "\$2" ;;
+    repos/*)                                      serve "$TEST_DIR/repo.json" "\$2" ;;
+  esac
+fi
+echo "fake gh: unexpected call: \$*" >&2; exit 1
+EOF
+    chmod +x "$TEST_DIR/fakebin/gh"
+}
+
 # repo_json — build a GitHub repo JSON with overridable fields.
 # Args: stars forks pushed_at archived spdx_id
 repo_json() {
@@ -117,7 +151,7 @@ repo_json() {
 score() {
     run env PATH="$TEST_DIR/fakebin:$PATH" CURATION_NOW=2026-06-13 \
         CURATION_GH_RETRIES=1 CURATION_GH_BACKOFF=0 \
-        bash -c "source '$TRUST_LIB'; trust_score '$1' '$2' 2>/dev/null"
+        bash -c "source '$TRUST_LIB'; trust_score '$1' '$2' '${3:-}' 2>/dev/null"
 }
 
 verdict_of() { printf '%s' "$1" | jq -r '.verdict'; }
@@ -416,6 +450,94 @@ EOF
 }
 
 # =============================================================================
+# License probe — SUBPATH-scoped license file
+# =============================================================================
+
+@test "trust_score: no root license but every consumed subpath ships one passes" {
+    # anthropics/skills has NEVER had a root LICENSE; each skill carries its own
+    # Apache-2.0 LICENSE.txt (verified: claude-api since 2026-03, mcp-builder too).
+    # A root-only probe therefore called a first-party, fully licensed repo
+    # "missing-license" and pinned it to propose-only forever.
+    fake_gh_subpaths \
+        "$(repo_json 9000 400 '2026-06-10T00:00:00Z' false NONE)" \
+        '[{"name":"README.md","type":"file"},{"name":"skills","type":"dir"}]' \
+        'skills/claude-api'  '[{"name":"LICENSE.txt","type":"file"},{"name":"SKILL.md","type":"file"}]' \
+        'skills/mcp-builder' '[{"name":"LICENSE.txt","type":"file"},{"name":"SKILL.md","type":"file"}]'
+    score "anthropics/skills" authority "skills/claude-api+skills/mcp-builder"
+    [[ "$status" -eq 0 ]]
+    [[ "$(verdict_of "$output")" == "pass" ]]
+    [[ "$output" == *"subpath-license"* ]]
+    [[ "$output" != *'"missing-license"'* ]]
+}
+
+@test "trust_score: ONE unlicensed subpath keeps the missing-license flag" {
+    # EVERY consumed subpath must carry its own license. Waving the repo through
+    # on the licensed one would license a skill that is NOT licensed — the arm
+    # must not become a way to smuggle an unlicensed subpath past the gate.
+    fake_gh_subpaths \
+        "$(repo_json 9000 400 '2026-06-10T00:00:00Z' false NONE)" \
+        '[{"name":"README.md","type":"file"}]' \
+        'skills/licensed'   '[{"name":"LICENSE.txt","type":"file"}]' \
+        'skills/unlicensed' '[{"name":"SKILL.md","type":"file"}]'
+    score "vendor/partly" authority "skills/licensed+skills/unlicensed"
+    [[ "$(verdict_of "$output")" == "flag" ]]
+    [[ "$output" == *"missing-license"* ]]
+    [[ "$output" != *"subpath-license"* ]]
+}
+
+@test "trust_score: an unfetchable subpath fails SAFE to missing-license" {
+    # EF-012: anything that cannot be confirmed licensed stays flagged.
+    fake_gh_subpaths \
+        "$(repo_json 9000 400 '2026-06-10T00:00:00Z' false NONE)" \
+        '[{"name":"README.md","type":"file"}]'
+    score "vendor/gone" authority "skills/vanished"
+    [[ "$(verdict_of "$output")" == "flag" ]]
+    [[ "$output" == *"missing-license"* ]]
+    [[ "$output" != *"subpath-license"* ]]
+}
+
+@test "trust_score: a subpath that resolves to a FILE fails SAFE, never passes" {
+    # The contents endpoint returns an OBJECT for a file path and an ARRAY for a
+    # directory. A malformed registry entry naming a file must not be read as a
+    # licensed directory — the probe must fall through to missing-license.
+    fake_gh_subpaths \
+        "$(repo_json 9000 400 '2026-06-10T00:00:00Z' false NONE)" \
+        '[{"name":"README.md","type":"file"}]' \
+        'skills/a/LICENSE.txt' '{"name":"LICENSE.txt","type":"file","path":"skills/a/LICENSE.txt"}'
+    score "vendor/filepath" authority "skills/a/LICENSE.txt"
+    [[ "$(verdict_of "$output")" == "flag" ]]
+    [[ "$output" == *"missing-license"* ]]
+    [[ "$output" != *"subpath-license"* ]]
+}
+
+@test "trust_score: a ROOT license file still wins over the subpath probe" {
+    # Precedence is unchanged for every repo that already passes at the root, so
+    # the new arm can neither alter an existing verdict nor its reason string.
+    fake_gh_subpaths \
+        "$(repo_json 9000 400 '2026-06-10T00:00:00Z' false NONE)" \
+        '[{"name":"LICENSE","type":"file"}]' \
+        'skills/a' '[{"name":"LICENSE.txt","type":"file"}]'
+    score "vendor/rooted" authority "skills/a"
+    [[ "$(verdict_of "$output")" == "pass" ]]
+    [[ "$output" == *"unrecognized-license"* ]]
+    [[ "$output" != *"subpath-license"* ]]
+}
+
+@test "trust_score: with NO subpath argument the verdict is exactly today's" {
+    # Zero-delta guard. Widening a license gate must stay INERT for every
+    # root-scoped record; only a caller that knows the skill lives in a subpath
+    # may opt in. Measured on the real registry: 2 records change, 18 do not.
+    fake_gh_subpaths \
+        "$(repo_json 9000 400 '2026-06-10T00:00:00Z' false NONE)" \
+        '[{"name":"README.md","type":"file"}]' \
+        'skills/a' '[{"name":"LICENSE.txt","type":"file"}]'
+    score "vendor/rootscoped" authority
+    [[ "$(verdict_of "$output")" == "flag" ]]
+    [[ "$output" == *"missing-license"* ]]
+    [[ "$output" != *"subpath-license"* ]]
+}
+
+# =============================================================================
 # trust_score — emitted signals + fail-safe + usage
 # =============================================================================
 
@@ -486,6 +608,22 @@ EOF
     run bash "$TRUST_LIB" only-one-arg
     [[ "$status" -eq 2 ]]
     [[ "$output" == *"Usage:"* ]]
+    run bash "$TRUST_LIB" a b c d
+    [[ "$status" -eq 2 ]]
+}
+
+@test "trust_score CLI: accepts the optional subpaths argument" {
+    # The 3-arg form is how a caller opts a subpath-scoped record into the
+    # subpath license arm; the CLI must not reject it as a wrong arg count.
+    fake_gh_subpaths \
+        "$(repo_json 9000 400 '2026-06-10T00:00:00Z' false NONE)" \
+        '[{"name":"README.md","type":"file"}]' \
+        'skills/claude-api' '[{"name":"LICENSE.txt","type":"file"}]'
+    run env PATH="$TEST_DIR/fakebin:$PATH" CURATION_NOW=2026-06-13 \
+        CURATION_GH_RETRIES=1 CURATION_GH_BACKOFF=0 \
+        bash "$TRUST_LIB" anthropics/skills authority skills/claude-api
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"subpath-license"* ]]
 }
 
 @test "trust_score: FAILS SAFE on gh error (verdict=error, exit 3)" {
