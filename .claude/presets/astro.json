@@ -48,20 +48,20 @@
       "url": "https://github.com/shadcn-ui/ui/tree/main/skills/shadcn",
       "rationale": "shadcn/ui patterns within Astro components",
       "condition": "if using shadcn/ui",
-      "pinnedRef": "shadcn@4.19.0",
+      "pinnedRef": "shadcn@4.21.0",
       "trustTrack": "authority",
       "provenance": "shadcn",
-      "lastVerified": "2026-08-26"
+      "lastVerified": "2026-09-07"
     },
     {
       "id": "frontend-design@claude-plugins-official",
       "url": "https://claude.com/plugins/frontend-design",
       "rationale": "Anthropic's official UI design plugin (essential for content/marketing sites)",
       "condition": "always",
-      "pinnedRef": "7930e1c82d997b013af28673501f3b95569a71cb",
+      "pinnedRef": "ab9b2cf7bb9e4f98ff264c07a22e46d83c29c558",
       "trustTrack": "authority",
       "provenance": "Anthropic",
-      "lastVerified": "2026-07-07"
+      "lastVerified": "2026-09-07"
     }
   ],
   "defaults": {
