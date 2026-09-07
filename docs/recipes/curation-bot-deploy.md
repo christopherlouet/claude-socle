@@ -104,6 +104,7 @@ Notes:
 - The nightly `git reset --hard origin/main` discards the watch's in-place `lastVerified` writes to `registry.json` — that is intentional and harmless (freshness bookkeeping; the digest is the durable output). The sustained-collapse **state** is preserved because it lives in `--state-file`, outside the checkout.
 - `curation-watch.sh` exits `0` on a completed run (with or without findings) and `2` only on a usage/setup error, so the timer's `OnFailure` only fires on real breakage.
 - `--emit-pr` is **draft by default**; pass `--no-draft` only if you want a ready PR.
+- **One open re-pin PR holds a lock on all the others.** While any `curation/re-pin-*` PR is open, no new re-pin PR is emitted (it would stack a near-duplicate every night, and force-updating the open branch could clobber in-flight curation commits). The digest names the blocking PR and its age, and escalates to a warning past `global.repinLockStaleDays` in `.claude/curation/trust-thresholds.json` (default 3 days). **Merge or close the open re-pin PR to release the auto-heal** — a lock left held simply parks every other re-pin behind it. The escalation also goes to stderr, so `journalctl -u curation-bot.service` shows it.
 
 ```bash
 chmod +x /opt/claude-base/scripts/curation-bot-run.sh

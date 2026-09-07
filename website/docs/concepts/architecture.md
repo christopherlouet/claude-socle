@@ -514,6 +514,9 @@ DEPLOY    docs/recipes/curation-bot-deploy.md    nightly ($0) + monthly (capped 
   monthly discovery is the only model-using part, under a hard budget + fail-safe.
 - **Observe-never-install**: the most it does is open a *draft* PR (low-risk re-pin) or a
   *propose-only* issue. Recommendation **drift** is also surfaced on `claude-base update`.
+- **One open re-pin PR locks the others** (no nightly near-duplicates). The digest names the
+  blocking PR and escalates to a warning past `global.repinLockStaleDays`, so a lock left
+  held can never look like a quiet night.
 
 ## Summary
 

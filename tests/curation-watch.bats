@@ -629,6 +629,11 @@ setup_emit_fakes() {
     cat > "$TEST_DIR/fakebin/gh" <<EOF
 #!/usr/bin/env bash
 echo "gh \$*" >> "$TEST_DIR/gh.log"
+prev=""
+for a in "\$@"; do
+  [ "\$prev" = "--body-file" ] && cat "\$a" >> "$TEST_DIR/body.cap" 2>/dev/null
+  prev="\$a"
+done
 if [ "\$1" = "api" ]; then
   f="$TEST_DIR/fx/\$(printf '%s' "\$2" | tr '/' '_')"
   if [ -f "\$f" ]; then cat "\$f"; exit 0; fi
@@ -637,10 +642,15 @@ if [ "\$1" = "api" ]; then
     *) echo "fake gh: 404 \$2" >&2; exit 1 ;;
   esac
 fi
-# Open re-pin PR lookup: FAKE_REPIN_FAIL=1 simulates a gh outage; else the
-# count of open curation/re-pin-* PRs is FAKE_REPIN_OPEN (default 0).
+# Open re-pin PR lookup: FAKE_REPIN_FAIL=1 simulates a gh outage; else the open
+# PR ROWS are FAKE_REPIN_ROWS (default: none open). Rows, not a count — the lock
+# has to name its holder and its age so the digest can escalate.
 case "\$*" in
-  *"pr list"*) [ "\${FAKE_REPIN_FAIL:-}" = "1" ] && exit 1; printf '%s' "\${FAKE_REPIN_OPEN:-0}" ;;
+  *"pr list"*)
+    [ "\${FAKE_REPIN_FAIL:-}" = "1" ] && exit 1
+    rows="\${FAKE_REPIN_ROWS:-}"
+    [ -n "\$rows" ] || rows='[]'
+    printf '%s' "\$rows" ;;
 esac
 exit 0
 EOF
@@ -654,6 +664,23 @@ esac
 exit 0
 EOF
     chmod +x "$TEST_DIR/fakebin/gh" "$TEST_DIR/fakebin/git"
+}
+
+# lock_rows <number> <createdAt> — the `gh pr list` rows for ONE open re-pin PR
+# holding the lock since <createdAt>.
+lock_rows() {
+    jq -cn --argjson n "$1" --arg c "$2" \
+        '[{number:$n, createdAt:$c, headRefName:"curation/re-pin-x",
+           url:("https://github.com/owner/repo/pull/" + ($n|tostring))}]'
+}
+
+# drifting_target — a registry + fixtures whose single target drifts and passes
+# the safety screen, i.e. a night the emitter WOULD open a re-pin PR.
+drifting_target() {
+    registry_one "acme/x" "v1.0.0" authority
+    gh_fixture "repos/acme/x" "$(repo_meta 82 '2026-06-12T00:00:00Z' false MIT)"
+    gh_fixture "repos/acme/x/releases/latest" '{"tag_name":"v1.2.0"}'
+    content_fixture acme/x v1.2.0 SKILL.md "# clean skill, nothing dangerous"
 }
 
 @test "watch: --emit-issue opens ONE propose-only issue when there are findings" {
@@ -741,7 +768,7 @@ EOF
     content_fixture acme/x v1.2.0 SKILL.md "# clean skill, nothing dangerous"
     run env PATH="$TEST_DIR/fakebin:$PATH" CURATION_NOW=2026-06-13 \
         CURATION_GH_RETRIES=1 CURATION_GH_BACKOFF=0 CURATION_THRESHOLDS="$THRESHOLDS" \
-        FAKE_REPIN_OPEN=1 \
+        FAKE_REPIN_ROWS="$(lock_rows 12 2026-06-11T09:00:00Z)" \
         bash "$WATCH" --registry "$TEST_DIR/registry.json" --presets-dir "$TEST_DIR/presets" --emit-pr --draft
     [[ "$status" -eq 0 ]]
     # no PR, no branch, no commit, no pin bump — the open PR keeps the lock
@@ -778,6 +805,148 @@ EOF
     [[ "$status" -eq 0 ]]
     grep 'pr list' "$TEST_DIR/gh.log" | grep -q -- '-R acme/claude-base'
     grep 'pr list' "$TEST_DIR/gh.log" | grep -q -- '--state open'
+}
+
+# =============================================================================
+# Lock staleness escalation (2026-09-06).
+#
+# The #458 lock held 7 nights on one unreviewed draft. Every one of those nights
+# the digest still printed `re-pin` in the Action column for every drift — an
+# action nobody was taking — and said nothing about the lock. The digest must
+# name the holder, date it, and escalate once it goes stale.
+# =============================================================================
+
+@test "watch: the digest names the blocking PR when re-pin emission was locked out" {
+    setup_emit_fakes
+    drifting_target
+    export FAKE_REPIN_ROWS="$(lock_rows 12 2026-06-11T09:00:00Z)"   # 2 days old
+    run_watch --emit-pr --draft --digest-dir "$TEST_DIR/digest"
+    [ "$status" -eq 0 ]
+    grep -q '#12' "$TEST_DIR/digest/digest.md"
+    grep -qi 'locked' "$TEST_DIR/digest/digest.md"
+    # the table's `re-pin` rows are proposals on a locked night, not opened PRs
+    grep -qi 'proposal' "$TEST_DIR/digest/digest.md"
+}
+
+@test "watch: the digest escalates once the lock is held past the staleness threshold" {
+    setup_emit_fakes
+    drifting_target
+    export FAKE_REPIN_ROWS="$(lock_rows 12 2026-06-06T09:00:00Z)"   # 7 days old
+    run_watch --emit-pr --draft --digest-dir "$TEST_DIR/digest"
+    [ "$status" -eq 0 ]
+    grep -q '⚠️' "$TEST_DIR/digest/digest.md"
+    grep -q '7 day' "$TEST_DIR/digest/digest.md"
+}
+
+@test "watch: a FRESH lock is reported without the stale escalation marker" {
+    setup_emit_fakes
+    drifting_target
+    export FAKE_REPIN_ROWS="$(lock_rows 12 2026-06-13T09:00:00Z)"   # same day
+    run_watch --emit-pr --draft --digest-dir "$TEST_DIR/digest"
+    [ "$status" -eq 0 ]
+    grep -q '#12' "$TEST_DIR/digest/digest.md"
+    [ "$(grep -c '⚠️' "$TEST_DIR/digest/digest.md")" -eq 0 ]
+}
+
+@test "watch: the staleness threshold is read from the thresholds file" {
+    setup_emit_fakes
+    drifting_target
+    jq '.global.repinLockStaleDays = 1' "$THRESHOLDS" > "$TEST_DIR/th.json"
+    export FAKE_REPIN_ROWS="$(lock_rows 12 2026-06-11T09:00:00Z)"   # 2 days old
+    run env PATH="$TEST_DIR/fakebin:$PATH" CURATION_NOW=2026-06-13 \
+        CURATION_GH_RETRIES=1 CURATION_GH_BACKOFF=0 CURATION_THRESHOLDS="$TEST_DIR/th.json" \
+        bash "$WATCH" --registry "$TEST_DIR/registry.json" --presets-dir "$TEST_DIR/presets" \
+        --emit-pr --draft --digest-dir "$TEST_DIR/digest"
+    [ "$status" -eq 0 ]
+    grep -q '⚠️' "$TEST_DIR/digest/digest.md"
+}
+
+@test "watch: a NON-INTEGER staleness threshold still escalates (never silently off)" {
+    # `jq numbers` lets a float through and `[ 7 -ge 3.5 ]` aborts with status 2,
+    # which every caller reads as "not stale" — a config typo would have turned
+    # the whole escalation off silently (review finding, 2026-09-06).
+    setup_emit_fakes
+    drifting_target
+    jq '.global.repinLockStaleDays = 3.5' "$THRESHOLDS" > "$TEST_DIR/th.json"
+    export FAKE_REPIN_ROWS="$(lock_rows 12 2026-06-06T09:00:00Z)"   # 7 days old
+    run env PATH="$TEST_DIR/fakebin:$PATH" CURATION_NOW=2026-06-13 \
+        CURATION_GH_RETRIES=1 CURATION_GH_BACKOFF=0 CURATION_THRESHOLDS="$TEST_DIR/th.json" \
+        bash "$WATCH" --registry "$TEST_DIR/registry.json" --presets-dir "$TEST_DIR/presets" \
+        --emit-pr --draft --digest-dir "$TEST_DIR/digest"
+    [ "$status" -eq 0 ]
+    grep -q '⚠️' "$TEST_DIR/digest/digest.md"
+}
+
+@test "watch: --dry-run --emit-pr previews the lock instead of the misleading normal night" {
+    # The lookup is a READ, so a preview can consult it. Without this, the one
+    # command a maintainer runs to inspect a suspicious digest by hand returns
+    # exactly the pre-fix digest that hid the lock (review finding, 2026-09-06).
+    setup_emit_fakes
+    drifting_target
+    export FAKE_REPIN_ROWS="$(lock_rows 12 2026-06-06T09:00:00Z)"
+    run_watch --emit-pr --draft --dry-run --digest-dir "$TEST_DIR/digest"
+    [ "$status" -eq 0 ]
+    grep -q '#12' "$TEST_DIR/digest/digest.md"
+    grep -q '⚠️' "$TEST_DIR/digest/digest.md"
+    # still a preview: no PR, no pin bump
+    [ "$(grep -c 'pr create' "$TEST_DIR/gh.log")" -eq 0 ]
+    [ "$(jq -r '.records[0].pinnedRef' "$TEST_DIR/registry.json")" = "v1.0.0" ]
+}
+
+@test "watch: the digest survives a lock it cannot fold into the JSON" {
+    # Regression for an inverted guard: `digest=$(… ) || :` assigns the EMPTY
+    # output first and only then swallows the status, so a jq failure blanked
+    # the entire digest — the guard destroyed what it meant to protect.
+    setup_emit_fakes
+    drifting_target
+    export FAKE_REPIN_ROWS="$(lock_rows 12 2026-06-06T09:00:00Z)"
+    export CURATION_LOCK_MERGE_FILTER='this is not a jq program'
+    run_watch --emit-pr --draft --digest-dir "$TEST_DIR/digest"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.generatedAt' "$TEST_DIR/digest/digest.json")" = "2026-06-13" ]
+    [ "$(jq -r '.findings | length' "$TEST_DIR/digest/digest.json")" -eq 1 ]
+}
+
+@test "watch: an unlocked night's digest carries NO lock notice" {
+    setup_emit_fakes
+    drifting_target
+    run_watch --emit-pr --draft --digest-dir "$TEST_DIR/digest"
+    [ "$status" -eq 0 ]
+    # Counted, not `! grep`: bash never applies `set -e` to a `!`-inverted
+    # command, so a non-final `! grep -q` assertion can never fail a bats test.
+    [ "$(grep -ci 'locked' "$TEST_DIR/digest/digest.md")" -eq 0 ]
+    [ "$(jq -r '.repinLock // "none"' "$TEST_DIR/digest/digest.json")" = "none" ]
+}
+
+@test "watch: digest.json records the lock for machine consumers" {
+    setup_emit_fakes
+    drifting_target
+    export FAKE_REPIN_ROWS="$(lock_rows 12 2026-06-06T09:00:00Z)"
+    run_watch --emit-pr --draft --digest-dir "$TEST_DIR/digest"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.repinLock.number' "$TEST_DIR/digest/digest.json")" = "12" ]
+    [ "$(jq -r '.repinLock.ageDays' "$TEST_DIR/digest/digest.json")" = "7" ]
+    [ "$(jq -r '.repinLock.stale' "$TEST_DIR/digest/digest.json")" = "true" ]
+}
+
+@test "watch: the emitted ISSUE body carries the lock notice too (the visible channel)" {
+    setup_emit_fakes
+    drifting_target
+    export FAKE_REPIN_ROWS="$(lock_rows 12 2026-06-06T09:00:00Z)"
+    run_watch --emit-pr --draft --emit-issue
+    [ "$status" -eq 0 ]
+    grep -q '#12' "$TEST_DIR/body.cap"
+    grep -q '⚠️' "$TEST_DIR/body.cap"
+}
+
+@test "watch: a stale lock is escalated on stderr for the systemd journal" {
+    setup_emit_fakes
+    drifting_target
+    export FAKE_REPIN_ROWS="$(lock_rows 12 2026-06-06T09:00:00Z)"
+    run_watch --emit-pr --draft
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"#12"* ]]
+    [[ "$output" == *"7 day"* ]]
 }
 
 @test "watch: --dry-run suppresses all emission" {

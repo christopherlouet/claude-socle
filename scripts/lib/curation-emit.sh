@@ -222,8 +222,69 @@ _skills_for_repo() {
         | grep . | sort -u | paste -sd',' - || true
 }
 
+# curation_repin_lock — echo the #458 open-PR lock as ONE JSON object
+# {count,number,createdAt,url,ageDays}, or NOTHING when no curation/re-pin-* PR
+# is open or the lookup could not be trusted. Read-only (a single `gh pr list`),
+# so a preview may call it without emitting anything.
+#
+# It reports WHO holds the lock and since WHEN (2026-09-06): held for 7 nights
+# on one unreviewed draft, the lock silently starved every other re-pin while
+# the digest kept printing "re-pin" as the action for each drift. The caller
+# renders that and escalates past a staleness bar, so a long-held lock can never
+# again look like a quiet night.
+#
+# A failed lookup echoes NOTHING — the worst case of an outage is the status-quo
+# duplicate PR, never a missed re-pin.
+curation_repin_lock() {
+    local lookup_repo rows n_open
+    lookup_repo=$(_curation_gh_repo) || lookup_repo=""
+    # --limit 100 mirrors emit_issue's rolling-issue lookup: gh's default page
+    # of 30 could miss the open lock PR on a busy repo (silent lock bypass).
+    # The branch filter is applied HERE, not in a server-side `--jq` string: as
+    # an argument handed to gh it could never be exercised by an offline test.
+    # The --json value is ONE comma-joined argument (quoted so it does not read
+    # as an array of elements — SC2054).
+    local lookup_args=(pr list --state open --limit 100
+        --json "number,createdAt,headRefName,url")
+    [ -n "$lookup_repo" ] && lookup_args+=(-R "$lookup_repo")
+    # Undatable rows sort LAST: a blank createdAt ahead of every real timestamp
+    # would make an undatable PR the reported holder and its unknown age the
+    # reported age, hiding a perfectly datable older one.
+    rows=$(gh "${lookup_args[@]}" 2>/dev/null) || return 0
+    rows=$(printf '%s' "$rows" | jq -c '
+        [.[] | select(.headRefName // "" | startswith("curation/re-pin-"))]
+        | sort_by(if (.createdAt // "") == "" then "9999" else .createdAt end)' 2>/dev/null) || return 0
+    n_open=$(printf '%s' "$rows" | jq 'length' 2>/dev/null) || return 0
+    [ "${n_open:-0}" -gt 0 ] 2>/dev/null || return 0
+
+    # Oldest first: the lock's age is the age of the PR that has held it
+    # longest, which is the number the maintainer needs to see.
+    local lock_num lock_created lock_url lock_age
+    lock_num=$(printf '%s' "$rows" | jq -r '.[0].number // empty')
+    lock_created=$(printf '%s' "$rows" | jq -r '.[0].createdAt // empty')
+    lock_url=$(printf '%s' "$rows" | jq -r '.[0].url // empty')
+    # An undatable createdAt still holds the lock — the age is reported as
+    # unknown (null) rather than guessed, and never as 0 (which would read as
+    # "opened today" and defuse the escalation).
+    lock_age=$(curation_days_since "$lock_created" 2>/dev/null) || lock_age=""
+    # The age is measured against the HOST clock, so a box running behind makes
+    # a fresh PR look future-dated. Read that as just-opened rather than
+    # printing a negative age or letting skew fake an escalation.
+    case "$lock_age" in -*) lock_age=0 ;; esac
+    jq -cn --argjson n "$n_open" --arg num "$lock_num" --arg created "$lock_created" \
+        --arg url "$lock_url" --arg age "$lock_age" \
+        '{count:$n,
+          number:(if $num=="" then null else ($num|tonumber) end),
+          createdAt:(if $created=="" then null else $created end),
+          url:(if $url=="" then null else $url end),
+          ageDays:(if $age=="" then null else ($age|tonumber) end)}'
+}
+
 # emit_repin_pr <surfaced-findings> <registry> <presets-dir> <draft-bool> <now>
-# Echoes a JSON summary {drafted:[subjects], demoted:[findings], branch?}.
+# Echoes a JSON summary {drafted:[subjects], demoted:[findings], branch?}. When
+# the open-PR lock stopped the emission it also carries skipped:"open-pr" and
+# lock:{count,number,createdAt,url,ageDays} — who holds it and for how long, so
+# the caller can say so in the digest instead of reporting a quiet night.
 emit_repin_pr() {
     local findings="$1" registry="$2" presets_dir="$3" draft="$4" now="$5"
     local repins n
@@ -240,23 +301,14 @@ emit_repin_pr() {
     # A failed lookup PROCEEDS — the worst case of an outage is the status-quo
     # duplicate PR, never a missed re-pin (checked before the safety screens,
     # sparing their per-finding gh calls on locked nights).
-    local lookup_repo open_count
-    lookup_repo=$(_curation_gh_repo) || lookup_repo=""
-    # --limit 100 mirrors emit_issue's rolling-issue lookup: gh's default page
-    # of 30 could miss the open lock PR on a busy repo (silent lock bypass).
-    local lookup_args=(pr list --state open --limit 100 --json headRefName
-        --jq '[.[] | select(.headRefName | startswith("curation/re-pin-"))] | length')
-    [ -n "$lookup_repo" ] && lookup_args+=(-R "$lookup_repo")
-    if open_count=$(gh "${lookup_args[@]}" 2>/dev/null); then
-        case "$open_count" in
-            ''|*[!0-9]*) : ;;   # unparseable → treat as lookup failure, proceed
-            0) : ;;
-            *)
-                curation_warn "an open curation/re-pin-* PR already exists; re-pin emission skipped"
-                jq -cn '{drafted:[], demoted:[], skipped:"open-pr"}'
-                return 0
-                ;;
-        esac
+    local lock lock_num lock_age
+    lock=$(curation_repin_lock)
+    if [ -n "$lock" ]; then
+        lock_num=$(printf '%s' "$lock" | jq -r '.number // "?"')
+        lock_age=$(printf '%s' "$lock" | jq -r '.ageDays // "?"')
+        curation_warn "an open curation/re-pin-* PR already exists (#$lock_num, open $lock_age day(s)); re-pin emission skipped"
+        jq -cn --argjson l "$lock" '{drafted:[], demoted:[], skipped:"open-pr", lock:$l}'
+        return 0
     fi
 
     # Pin-time safety gate (T303): only a drift whose NEW ref passes the content

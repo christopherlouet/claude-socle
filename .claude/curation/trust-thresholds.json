@@ -6,7 +6,8 @@
     "rejectArchived": true,
     "maxStaleDays": 365,
     "missingLicenseVerdict": "flag",
-    "collapseDropPct": 50
+    "collapseDropPct": 50,
+    "repinLockStaleDays": 3
   },
   "tracks": {
     "authority": {
