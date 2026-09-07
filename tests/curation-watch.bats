@@ -300,6 +300,45 @@ subpath_target() {
     gh_fixture "repos/acme/mono/commits/HEAD" "{\"sha\":\"$NEW_SHA\"}"
 }
 
+# per-skill licensing: the repo root carries no license, each subpath does
+# (anthropics/skills). Registers everything EXCEPT a root contents listing, so
+# the root license probe 404s exactly as it does against the real repo.
+subpath_unlicensed_root() {
+    registry_one "$1" "$OLD_SHA" authority
+    gh_fixture "repos/acme/mono" "$(repo_meta 9000 '2026-06-12T00:00:00Z' false NONE)"
+    gh_fixture "repos/acme/mono/commits/HEAD" "{\"sha\":\"$NEW_SHA\"}"
+    gh_fixture "repos/acme/mono/compare/$OLD_SHA...$NEW_SHA" \
+        '{"files":[{"filename":"plugins/x/SKILL.md"}]}'
+}
+
+@test "watch: a subpath skill licensed only inside its subpath is re-pinnable" {
+    # The whole point. anthropics/skills was read as unlicensed because the probe
+    # only ever asked the repo ROOT, so its drift could never leave propose-only
+    # and it re-surfaced in the digest every single night.
+    subpath_unlicensed_root "acme/mono/plugins/x"
+    gh_fixture "repos/acme/mono/contents/plugins/x" \
+        '[{"name":"LICENSE.txt","type":"file"},{"name":"SKILL.md","type":"file"}]'
+    run_watch
+    [[ "$status" -eq 0 ]]
+    [[ "$(printf '%s' "$output" | jq -r '.findings[0].type')" == "drift" ]]
+    [[ "$(printf '%s' "$output" | jq -r '.findings[0].verdict')" == "pass" ]]
+    [[ "$(printf '%s' "$output" | jq -r '.findings[0].proposedAction')" == "re-pin" ]]
+    [[ "$output" == *"subpath-license"* ]]
+}
+
+@test "watch: a subpath skill with NO license anywhere stays propose-only" {
+    # The counterpart that keeps the widening honest: nothing is waved through
+    # just because the record happens to be subpath-scoped.
+    subpath_unlicensed_root "acme/mono/plugins/x"
+    gh_fixture "repos/acme/mono/contents/plugins/x" \
+        '[{"name":"SKILL.md","type":"file"}]'
+    run_watch
+    [[ "$status" -eq 0 ]]
+    [[ "$(printf '%s' "$output" | jq -r '.findings[0].verdict')" == "flag" ]]
+    [[ "$(printf '%s' "$output" | jq -r '.findings[0].proposedAction')" == "propose" ]]
+    [[ "$output" == *"missing-license"* ]]
+}
+
 @test "watch: a sha-pin subpath skill is NOT drift when the compare never touches its subpath" {
     subpath_target "acme/mono/plugins/x"
     gh_fixture "repos/acme/mono/compare/$OLD_SHA...$NEW_SHA" \
@@ -378,6 +417,36 @@ subpath_target() {
         '{"files":[{"filename":"docs/other.md"}]}'
     run_watch
     [[ "$(printf '%s' "$output" | jq -r '.findings[0].type')" == "drift" ]]
+}
+
+@test "watch: a root record is NOT licensed by a sibling subpath's LICENSE" {
+    # Same two-record shape, applied to the LICENSE question. One record watches
+    # the whole repo, so the repo itself is a skill and its root is unlicensed —
+    # a license sitting inside a sibling subpath licenses that subpath, not the
+    # repo. The subpath arm must stay inert here or it becomes a way to launder
+    # an unlicensed root through any licensed subpath that happens to exist.
+    jq -cn --arg p "$OLD_SHA" '{version:"1.0.0", records:[
+        {foundationSkill:"x", vendorId:"acme/mono/plugins/x",
+         vendorUrl:"https://github.com/acme/mono", pinnedRef:$p,
+         trustTrack:"authority", trustVerdict:"pass", provenance:"Acme",
+         adviceNeutrality:"pass", lastVerified:"2026-01-01", status:"candidate",
+         sourceAudit:"t", flags:[]},
+        {foundationSkill:"y", vendorId:"acme/mono",
+         vendorUrl:"https://github.com/acme/mono", pinnedRef:$p,
+         trustTrack:"authority", trustVerdict:"pass", provenance:"Acme",
+         adviceNeutrality:"pass", lastVerified:"2026-01-01", status:"candidate",
+         sourceAudit:"t", flags:[]}]}' > "$TEST_DIR/registry.json"
+    gh_fixture "repos/acme/mono" "$(repo_meta 9000 '2026-06-12T00:00:00Z' false NONE)"
+    gh_fixture "repos/acme/mono/commits/HEAD" "{\"sha\":\"$NEW_SHA\"}"
+    gh_fixture "repos/acme/mono/compare/$OLD_SHA...$NEW_SHA" \
+        '{"files":[{"filename":"plugins/x/SKILL.md"}]}'
+    gh_fixture "repos/acme/mono/contents/plugins/x" \
+        '[{"name":"LICENSE.txt","type":"file"}]'
+    run_watch
+    [[ "$(printf '%s' "$output" | jq -r '.findings[0].verdict')" == "flag" ]]
+    [[ "$(printf '%s' "$output" | jq -r '.findings[0].proposedAction')" == "propose" ]]
+    [[ "$output" == *"missing-license"* ]]
+    [[ "$output" != *"subpath-license"* ]]
 }
 
 # =============================================================================

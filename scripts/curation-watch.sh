@@ -287,8 +287,23 @@ watch_one() {
     # preset-only repo). Computed offline from the registry — no gh call.
     local for_skills; for_skills=$(_skills_for_repo "$repo" "$REGISTRY")
 
+    # Subpath scope, computed ONCE (offline, jq over the registry + presets) and
+    # used by both the license probe and the subpath-scoped drift check below.
+    # It is set only when EVERY record watching this repo is subpath-scoped: a
+    # root record means the whole repo is the skill, and the repo's own root is
+    # then the only thing that can answer either question.
+    local scope=""
+    if ! _repo_has_root_record "$repo" "$REGISTRY" "$PRESETS_DIR"; then
+        scope=$(_subpaths_for_repo "$repo" "$REGISTRY" "$PRESETS_DIR")
+    fi
+
+    # The license question follows the same scoping: a repo that licenses per
+    # SKILL rather than at its root (anthropics/skills ships an Apache-2.0
+    # LICENSE.txt inside each skill and has never had a root one) was read as
+    # unlicensed and pinned to propose-only forever. Inert for a root-scoped
+    # repo, so no record that passes today can change verdict.
     local score verdict
-    if ! score=$(trust_score "$repo" "$track" 2>/dev/null); then
+    if ! score=$(trust_score "$repo" "$track" "$scope" 2>/dev/null); then
         # gh unavailable → fail-safe error finding; never abort the run.
         jq -cn --arg repo "$repo" --arg track "$track" --arg pinned "$pinned" \
             --arg forSkills "$for_skills" \
@@ -319,10 +334,7 @@ watch_one() {
     # when the accumulated repo range exceeds the compare cap (300 files),
     # whose fail-open surfaces a baseline-advancing re-pin at bounded
     # intervals. Tag pins are governed by release/tag-family semantics instead.
-    if [ "$drift" = "true" ] && [[ "$pinned" =~ ^[0-9a-f]{40}$ ]] \
-        && ! _repo_has_root_record "$repo" "$REGISTRY" "$PRESETS_DIR"; then
-        local scope
-        scope=$(_subpaths_for_repo "$repo" "$REGISTRY" "$PRESETS_DIR")
+    if [ "$drift" = "true" ] && [[ "$pinned" =~ ^[0-9a-f]{40}$ ]]; then
         if [ -n "$scope" ] \
             && [ "$(_drift_subpath_touched "$repo" "$pinned" "$current" "$scope")" = "no" ]; then
             drift="false"
