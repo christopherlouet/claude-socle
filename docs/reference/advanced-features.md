@@ -88,13 +88,19 @@ Useful for: CI/CD integration, setup scripts, notification hooks.
 
 `claude-opus-5` is the new default of the `opus` tier alias (CC 2.1.219) — **same price as Opus 4.8 (`$5/$25` per MTok) with greatly improved performance**: within ~0.5% of Fable 5's peak scores at half Fable's price, double Opus 4.8 on Frontier-Bench v0.1, and ahead of Fable 5 on OSWorld 2.0. 1M context, configurable effort settings, fast mode at `$10/$50` per MTok (~2.5× speed). Agent `model: opus` frontmatter picks it up with no change. Opus 4.8 is not deprecated — it serves as fallback for flagged requests and stays available in fast mode. ([Announcement](https://techcrunch.com/2026/07/24/anthropic-launches-opus-5/))
 
-## Fable 5 (above-Opus tier — niche since Opus 5)
+## Fable 5.1 (above-Opus tier — niche since Opus 5)
 
-`claude-fable-5`: 1M context (default and max), 128K output, ~$10/$50 per MTok (2× Opus 5). Since Opus 5 closes to within ~0.5% of its peak at half the price, Fable 5 is a **rare, deliberate escalation** for the hardest long-horizon autonomous runs only — not the routine "hard chantier" pick it briefly was.
+`claude-fable-5-1` (since 2026-09-01, CC 2.1.257 — the default Fable model, superseding `claude-fable-5`): 1M context (default and max), 128K output, `$10/$50` per MTok. Anthropic's own guidance is to start from Opus 5 for most workloads and reach for Fable 5.1 for demanding reasoning and long-horizon agentic work, or when evals on Opus 5 at higher effort still fall short — which is the position this foundation already took. It stays a **rare, deliberate escalation**, not the routine "hard chantier" pick it briefly was.
 
-> ✅ **Availability:** generally available since 2026-07-01 (the June export-control directive was lifted 2026-06-30). Mythos 5 stays restricted to a subset of US organizations. ([Anthropic statement](https://www.anthropic.com/news/claude-fable-5-mythos-5))
+**What changed with 5.1 is the cache economics, not the sticker price.** Cache reads dropped to `$0.25` per MTok, a quarter of Fable 5's; Anthropic estimates ~25% off a typical workload and up to ~45% off a highly agentic one. Every other model reads cache at 0.1× base input; Opus 5 reads at `$0.50` per MTok, so **Fable 5.1's cache reads are half of Opus 5's.** Base input and output remain 2× Opus 5, so the "2× Opus 5" shorthand still holds for a short one-shot request but overstates the gap for a long session re-reading a cached prefix.
 
-Behaviourally: thinking is always on (the raw chain of thought is never returned) and individual turns on hard tasks can run several minutes — plan for streaming and async check-ins. For the API-level caveats when building with the SDK (no `thinking:{type:"disabled"}`, no assistant prefill, refusal classifiers, 30-day data retention), see the `dev-ai-integration` skill.
+A **`fable` alias now exists** in sub-agent `model:` frontmatter (alongside `sonnet`, `opus`, `haiku`, full ids and `inherit`). This foundation still pins no agent to Fable: that is a cost decision, no longer a limitation of the tool. In Claude apps gateway sessions `fable` and `best` still resolve to Fable 5 rather than 5.1 (CC 2.1.260), so select 5.1 explicitly.
+
+Three breaking changes if you call it from the SDK: forced tool use (`tool_choice` `any`/`tool`) returns a 400, earlier models cannot read its thinking blocks, and editing earlier turns invalidates them. Claude Code keeps the prefix intact for you; hand-built `messages` arrays need the history-editing check.
+
+> ✅ **Availability:** the tier has been generally available since 2026-07-01 (the June export-control directive was lifted 2026-06-30). Mythos 5.1 is restricted to Project Glasswing participants. ([Fable 5.1 announcement](https://www.anthropic.com/claude-fable-and-mythos-5-1), [what's new](https://platform.claude.com/docs/en/models/fable-5-1/whats-new-fable-5-1))
+
+Behaviourally: thinking is always on (the raw chain of thought is never returned) and individual turns on hard tasks can run several minutes — plan for streaming and async check-ins. Versus Fable 5, 5.1 batches parallel tool calls less predictably, writes fewer progress updates, and is likelier to rewrite a whole file instead of making a targeted edit. For the API-level caveats when building with the SDK (no `thinking:{type:"disabled"}`, no assistant prefill, refusal classifiers, 30-day data retention), see the `dev-ai-integration` skill.
 
 ## Opus 4.8 (superseded by Opus 5)
 
@@ -284,6 +290,16 @@ MCP tools can declare `_meta["anthropic/maxResultSizeChars"]` (up to 500K) to ov
 ```
 
 Recommendations: always `async: true` and `onFailure: "ignore"` to avoid blocking the session if the remote service is unavailable.
+
+## Model-switch hooks (CLI 2.1.251+)
+
+`PreModelSwitch` and `PostModelSwitch` fire around a model change and can block, confirm, or annotate it. Useful where a project wants the tier pinned: a `PreModelSwitch` hook can refuse an unplanned escalation to the above-Opus tier, which is the deterministic counterpart to the `Agent(model:fable*)` permission rule shown above. The foundation ships neither — both stay opt-in, cost-neutral hardening.
+
+`SessionStart` resume hooks also now receive session staleness and the estimated re-cache cost.
+
+## `/skill-doctor` (CLI 2.1.260+)
+
+Reports which loaded skills go unused in a session and what each costs in context, so a bloated skill set can be pruned on measurement rather than on intuition. Relevant to any project that installs a large skill set — this foundation ships 53 — and to the same question for any always-loaded file: the cost is context, so measure what actually fires before setting a size budget by argument.
 
 ## Claude Code Security (Enterprise/Team)
 
@@ -540,6 +556,8 @@ Enable in `.claude/settings.local.json` (not committed):
 | `CLAUDE_STREAM_IDLE_TIMEOUT_MS` | Configures the streaming inactivity watchdog (CLI 2.1.84+) |
 | `OTEL_LOG_RAW_API_BODIES=1` | Emits full API request/response bodies via OpenTelemetry (CLI 2.1.113+) |
 | `MAX_THINKING_TOKENS=0` | Disables thinking, including on models that think by default — same effect as `--thinking disabled` or the per-model toggle (CLI 2.1.166+) |
+| `CLAUDE_CODE_SUBAGENT_MODEL` | Sets the **default** sub-agent model. Since CLI 2.1.248 it no longer overrides everything: an agent definition's `model:` and an explicit per-spawn model win over it — which is why this foundation's 44 pinned agents keep their tier when it is set |
+| `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` | Applies `CLAUDE_CODE_SUBAGENT_MODEL` (or the main model) to **every** sub-agent, ignoring per-spawn and agent-definition overrides (CLI 2.1.248+). The escape hatch for a whole-fleet cost experiment |
 
 ## Advanced Settings
 
@@ -575,7 +593,7 @@ Enable in `.claude/settings.local.json` (not committed):
       "Agent(isolation:remote)"   // confirm before a remote/cloud agent run
     ],
     "deny": [
-      "Agent(model:fable*)"        // block the (export-restricted) Fable tier outright
+      "Agent(model:fable*)"        // block the costlier above-Opus Fable tier outright
     ]
   }
 }

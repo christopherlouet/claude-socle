@@ -12,18 +12,23 @@ on demand, not carried (`specs/guardrail-cleanup/carried-material.md`).
 
 > "I use Opus with adaptive thinking for everything." -- Boris Cherny
 
-_(Since 2026-07-24, **Opus 5** is the recommended default for complex work — near-Fable intelligence at half Fable's price.)_
+_(Since 2026-07-24, **Opus 5** is the recommended default for complex work — near-Fable intelligence at half Fable's base price. Anthropic's own model guidance says the same: start from Opus 5.)_
 
 | Context | Model | Rationale |
 |----------|--------|---------------|
 | Complex tasks (default) | **Opus 5** (`claude-opus-5`) | Released 2026-07-24: within ~0.5% of Fable 5's peak scores at **half the price** (`$5/$25` per MTok — same as Opus 4.8), 1M context, configurable effort. The `opus` alias resolves to it automatically |
-| Extreme niche: the ~0.5% Fable still wins | **Fable 5** (`claude-fable-5`) | ~$10/$50 per MTok (2× Opus 5). Since Opus 5, a **rare, deliberate** choice — see the note below |
+| Extreme niche: the ~0.5% Fable still wins | **Fable 5.1** (`claude-fable-5-1`) | `$10/$50` per MTok, but cache reads at `$0.25` per MTok — **cheaper per cache read than Opus 5**, so the effective gap on a long agentic session is well under 2×. Since Opus 5, still a **rare, deliberate** choice — see the note below |
 | Audits, analyses, high-volume agentic work | **Sonnet** (Sonnet 5) | 1M context, `$2/$10` per MTok — permanent since 2026-08-10 (the planned `$3/$15` rise was cancelled) vs Opus `$5/$25`. Claude Code's **default model** for subscription seats since 2026-06-30 |
 | Simple tasks | **Haiku** | Fast for trivial operations |
 
 > **Opus 5 (since 2026-07-24):** the new default of the `opus` tier alias (no agent-frontmatter change needed). Same price as Opus 4.8 with greatly improved performance: doubles Opus 4.8 on Frontier-Bench v0.1 and outperforms Fable 5 on OSWorld 2.0 at a third of the cost. Fast mode runs on it at `$10/$50` per MTok (~2.5× speed). Opus 4.8 is not deprecated (it serves as fallback) but is no longer the recommendation. ([Announcement](https://techcrunch.com/2026/07/24/anthropic-launches-opus-5/))
 
-> **Fable 5 after Opus 5:** the "escalate to Fable for hard chantiers" advice is largely **obsolete** — Opus 5 lands within ~0.5% of Fable's peak at half the price, so Opus 5 absorbs the escalation role. Fable 5 remains relevant only where that last half-percent measurably matters (the hardest long-horizon autonomous runs) and there is still **no `fable` tier alias**: select it per-session via `/model` or `--model claude-fable-5`, deliberately. Availability note: Fable 5 has been generally available again since 2026-07-01 (the June export-control directive was lifted 2026-06-30; Mythos 5 stays restricted to a subset of US organizations). ([Anthropic statement](https://www.anthropic.com/news/claude-fable-5-mythos-5))
+> **Fable 5.1 after Opus 5 (updated 2026-09-07):** the "escalate to Fable for hard chantiers" advice stays **obsolete as a default** — and this is now Anthropic's own guidance, which says to start from Opus 5 for most workloads and reach for Fable 5.1 for demanding reasoning and long-horizon agentic work, or when evals on Opus 5 at higher effort still fall short. Two things changed on 2026-09-01 (Claude Code 2.1.257):
+>
+> - **`claude-fable-5-1` replaced `claude-fable-5` as the default Fable model.** Same `$10/$50` per MTok, but **cache reads dropped to `$0.25` per MTok** (a quarter of Fable 5's). Anthropic estimates ~25% off a typical workload and up to ~45% off a highly agentic one. Opus 5 reads cache at `$0.50` per MTok, so **Fable 5.1's cache reads are half of Opus 5's** — the old "2× Opus 5" shorthand overstates the gap exactly where this foundation spends its tokens: long sessions re-reading a cached prefix. ([pricing table](https://platform.claude.com/docs/en/about-claude/pricing))
+> - **A `fable` alias now exists.** Sub-agent `model:` frontmatter accepts `sonnet`, `opus`, `haiku` and `fable`, plus full ids and `inherit`. This foundation still **does not pin any agent to Fable** — that is a deliberate cost choice, no longer a limitation of the tool. Note that in Claude apps gateway sessions `fable` and `best` still resolve to Fable 5, not 5.1 (2.1.260), so pick 5.1 explicitly via `/model` or `--model claude-fable-5-1`.
+>
+> Availability: the June export-control directive was lifted 2026-06-30 and the Fable tier has been generally available since 2026-07-01; Mythos 5.1 is restricted to Project Glasswing participants. ([Fable 5.1 announcement](https://www.anthropic.com/claude-fable-and-mythos-5-1), [what's new](https://platform.claude.com/docs/en/models/fable-5-1/whats-new-fable-5-1))
 
 > **Sonnet 5 (since 2026-06-30):** Claude Code's own default for subscription seats — near-Opus-4.8 quality on many agentic tasks at roughly a third of the cost, native 1M context, `sonnet` alias absorbs it automatically. This foundation recommends **Opus 5 for complex/critical work** (TDD, Audit, architecture) where the quality delta pays off, and Sonnet 5 for audits, analyses, and high-volume agentic passes where its price/perf shines.
 

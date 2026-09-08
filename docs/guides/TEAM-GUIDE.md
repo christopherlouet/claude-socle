@@ -319,7 +319,7 @@ paths:
 
 | Usage | Model | Why |
 |-------|-------|-----|
-| Hardest / long-horizon autonomous work (rare) | Fable 5 (`claude-fable-5`) | ~2× Opus 5 cost for ~0.5% over Opus 5's peak — **deliberate niche** use since Opus 5 |
+| Hardest / long-horizon autonomous work (rare) | Fable 5.1 (`claude-fable-5-1`) | 2× Opus 5 on input and output, but **cheaper per cache read** — **deliberate niche** use since Opus 5 |
 | Architecture, design | Opus 5 | Near-Fable reasoning at half Fable's price, 1M context, `xhigh` effort |
 | Feature implementation | Sonnet | Speed/quality balance |
 | Exploration, reading | Haiku | Fast for simple operations |
@@ -327,7 +327,7 @@ paths:
 | PR reviews in CI | Haiku | Low cost, high volume |
 | Cloud review (large PRs) | `/code-review ultra` | Parallel agents in cloud (`/ultrareview` is a deprecated alias) |
 
-> **Running the foundation's own heavy sessions on Fable 5:** since Opus 5 (2026-07-24, within ~0.5% of Fable's peak at half the price), Opus 5 is the right pick for large migrations and deep audits too — reserve `--model claude-fable-5` (or `/model`) for the rare run where Fable's last half-percent measurably matters. Still ~2× Opus 5 cost, still no `fable` tier alias (per-session selection only, never pinned to an agent). `claude-fable-5` has been generally available since 2026-07-01 ([details](https://www.anthropic.com/news/claude-fable-5-mythos-5)).
+> **Running the foundation's own heavy sessions on Fable 5.1:** Opus 5 is the right pick for large migrations and deep audits too — this is Anthropic's own guidance, which says to start from Opus 5 and reach for Fable 5.1 when evals on Opus 5 at higher effort still fall short. Reserve `--model claude-fable-5-1` (or `/model`) for those runs. Two updates since 2026-09-01: `claude-fable-5-1` is the default Fable model, and **a `fable` alias now exists** in sub-agent frontmatter. This foundation still never pins an agent to Fable — that is a cost decision, not a limitation. On cost, the old "2× Opus 5" shorthand holds for input and output but not for cache reads, which are `$0.25` per MTok on Fable 5.1 against `$0.50` on Opus 5 ([announcement](https://www.anthropic.com/claude-fable-and-mythos-5-1)).
 
 ---
 
