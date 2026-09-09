@@ -70,10 +70,10 @@
       "url": "https://github.com/prisma/skills",
       "rationale": "Prisma ORM patterns, especially v7 (ESM-only, driver adapters)",
       "condition": "if using Prisma",
-      "pinnedRef": "808913c1dac11dc425631c2454f7fcb2d5ade5ca",
+      "pinnedRef": "1123817e60d15ca0f3af91878923241dee7e3b09",
       "trustTrack": "authority",
       "provenance": "Prisma",
-      "lastVerified": "2026-08-26"
+      "lastVerified": "2026-09-09"
     },
     {
       "id": "shadcn-ui/ui (skills/shadcn)",
