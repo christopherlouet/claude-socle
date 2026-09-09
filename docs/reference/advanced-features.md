@@ -297,9 +297,30 @@ Recommendations: always `async: true` and `onFailure: "ignore"` to avoid blockin
 
 `SessionStart` resume hooks also now receive session staleness and the estimated re-cache cost.
 
-## `/skill-doctor` (CLI 2.1.260+)
+## Skill usage and context costs (Plugins → Stats)
 
-Reports which loaded skills go unused in a session and what each costs in context, so a bloated skill set can be pruned on measurement rather than on intuition. Relevant to any project that installs a large skill set — this foundation ships 53 — and to the same question for any always-loaded file: the cost is context, so measure what actually fires before setting a size budget by argument.
+Reports which loaded skills go unused and what each costs in context, so a bloated skill set can be
+pruned on measurement rather than on intuition. Introduced as `/skill-doctor` in CLI 2.1.260; **the
+report now lives in the `Stats` tab of the Plugins panel** (observed on 2.1.263), and typing
+`/skill-doctor` opens it there.
+
+Read the columns before reading the verdict:
+
+| Column | What it measures |
+|--------|------------------|
+| context | the skill's **one-line listing in the system prompt**, included **every turn**. A dash means the skill is not in the current listing and costs nothing; the full `SKILL.md` loads only when the skill runs |
+| 7d tokens | tokens attributed to the skill over the **last 7 days** of sessions on this machine |
+| invocations / last used | a **persistent history across sessions**, counted in days since last use — not a snapshot of the session you run it in |
+
+Relevant to any project that installs a large skill set — this foundation ships 53 — and to the same
+question for any always-loaded file: the cost is context, so measure what actually fires before
+setting a size budget by argument.
+
+One trap, and it is the whole reason this section names the columns. **Usage measured in the
+repository that AUTHORS a skill set says what that repository is, not whether the skills earn their
+place.** A foundation repo writes skills and rarely invokes them; its consumers do the opposite. Read
+the Stats tab on a *consuming* project before removing anything, or the reading comes from a regime
+where the effect could not appear.
 
 ## Claude Code Security (Enterprise/Team)
 
