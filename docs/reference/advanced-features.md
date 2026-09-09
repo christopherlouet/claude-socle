@@ -316,11 +316,16 @@ Relevant to any project that installs a large skill set — this foundation ship
 question for any always-loaded file: the cost is context, so measure what actually fires before
 setting a size budget by argument.
 
-One trap, and it is the whole reason this section names the columns. **Usage measured in the
-repository that AUTHORS a skill set says what that repository is, not whether the skills earn their
-place.** A foundation repo writes skills and rarely invokes them; its consumers do the opposite. Read
-the Stats tab on a *consuming* project before removing anything, or the reading comes from a regime
-where the effect could not appear.
+One trap, and it is the whole reason this section names the columns. **The counters are
+machine-wide, not scoped to the repository you run them from.** The instinct is the opposite: a
+foundation repo authors skills and rarely invokes them, so its own reading looks like it must
+understate the catalogue. It does not, because the reading was never about that repo. Measured here:
+the tab credits `qa:qa-chrome` with 5 invocations, and all five were typed in a different project,
+zero in this one. The same holds for every command checked.
+
+What follows is that a "never invoked" row is fleet evidence, not local evidence, and that the number
+describes **your** use of the catalogue rather than the catalogue's worth to anyone else. Both
+matter before removing anything.
 
 ## Claude Code Security (Enterprise/Team)
 
